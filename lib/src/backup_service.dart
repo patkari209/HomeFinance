@@ -147,6 +147,7 @@ class BackupService {
             bankName: cell('bankName'),
             cardName: cell('cardName'),
             externalMessageId: cell('externalMessageId'),
+            scheduledEmiPlanId: cell('scheduledEmiPlanId'),
             country: cell('country'),
           ),
         );
