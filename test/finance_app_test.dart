@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:home_finance/src/android_sms_import_controller.dart';
 import 'package:home_finance/src/app.dart';
-import 'package:home_finance/src/collaboration_controller.dart';
 import 'package:home_finance/src/finance_controller.dart';
 import 'package:home_finance/src/models.dart';
 
@@ -30,20 +28,10 @@ void main() {
   testWidgets('app shows finance dashboard and expenses tab', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final controller = await FinanceController.load();
-    final collaborationController = await CollaborationController.load(
-      controller,
-      enableExternalServices: false,
-    );
-    final smsImportController = await AndroidSmsImportController.load(
-      controller,
-      enablePlatformIntegration: false,
-    );
 
     await tester.pumpWidget(
       HomeFinanceApp(
         controller: controller,
-        collaborationController: collaborationController,
-        smsImportController: smsImportController,
       ),
     );
     await tester.pumpAndSettle();
@@ -62,13 +50,47 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Daily Expenses'), findsOneWidget);
-    expect(find.text('Manual entry'), findsOneWidget);
+    expect(find.text('Import message'), findsOneWidget);
+    expect(find.byTooltip('Add entry'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
-    smsImportController.dispose();
-    collaborationController.dispose();
     controller.dispose();
+  });
+
+  test('scheduled EMI automatically appears in monthly expense ledger', () async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = await FinanceController.load();
+    await controller.initializeFirstLedger(
+      currencyCode: 'SGD',
+      displayName: 'Singapore Wallet',
+    );
+
+    await controller.addScheduledEmi(
+      ledgerId: controller.selectedLedgerId,
+      currencyCode: controller.selectedCurrencyCode,
+      name: 'Home loan EMI',
+      merchant: 'DBS Loan',
+      amount: 1200,
+      dayOfMonth: 8,
+      startMonth: DateTime(2026, 4),
+      notes: 'Recurring housing EMI',
+      paidByKind: PaymentSourceKind.bank,
+      bankName: 'DBS',
+    );
+
+    final expenses = controller.expensesForSelectedLedgerInMonth(DateTime(2026, 4));
+
+    expect(expenses, isNotEmpty);
+    expect(expenses.first.subtype, ExpenseSubtype.emi);
+    expect(expenses.first.isScheduledEmiGenerated, isTrue);
+    expect(
+      controller.totalExpenseForLedgerInMonth(
+        controller.selectedLedgerId,
+        DateTime(2026, 4),
+      ),
+      equals(1200),
+    );
   });
 
   test('forex transfer report tracks SGD to INR totals', () async {

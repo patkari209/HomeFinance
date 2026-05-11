@@ -287,6 +287,7 @@ class ExpenseEntry {
     required this.bankName,
     required this.cardName,
     required this.externalMessageId,
+    required this.scheduledEmiPlanId,
     required this.country,
   });
 
@@ -310,7 +311,10 @@ class ExpenseEntry {
   final String bankName;
   final String cardName;
   final String externalMessageId;
+  final String scheduledEmiPlanId;
   final String country;
+
+  bool get isScheduledEmiGenerated => scheduledEmiPlanId.isNotEmpty;
 
   bool get needsReview =>
       source != EntrySource.manual &&
@@ -335,6 +339,7 @@ class ExpenseEntry {
     String? bankName,
     String? cardName,
     String? externalMessageId,
+    String? scheduledEmiPlanId,
     String? country,
   }) {
     return ExpenseEntry(
@@ -357,6 +362,7 @@ class ExpenseEntry {
       bankName: bankName ?? this.bankName,
       cardName: cardName ?? this.cardName,
       externalMessageId: externalMessageId ?? this.externalMessageId,
+      scheduledEmiPlanId: scheduledEmiPlanId ?? this.scheduledEmiPlanId,
       country: country ?? this.country,
     );
   }
@@ -381,6 +387,7 @@ class ExpenseEntry {
         'bankName': bankName,
         'cardName': cardName,
         'externalMessageId': externalMessageId,
+        'scheduledEmiPlanId': scheduledEmiPlanId,
         'country': country,
       };
 
@@ -429,6 +436,7 @@ class ExpenseEntry {
       bankName: json['bankName'] as String? ?? '',
       cardName: json['cardName'] as String? ?? '',
       externalMessageId: json['externalMessageId'] as String? ?? '',
+      scheduledEmiPlanId: json['scheduledEmiPlanId'] as String? ?? '',
       country: json['country'] as String? ?? '',
     );
   }
@@ -772,6 +780,97 @@ class LiabilityHolding {
   }
 }
 
+class ScheduledEmiPlan {
+  ScheduledEmiPlan({
+    required this.id,
+    required this.ledgerId,
+    required this.currencyCode,
+    required this.name,
+    required this.merchant,
+    required this.amount,
+    required this.dayOfMonth,
+    required this.startMonth,
+    required this.endMonth,
+    required this.notes,
+    required this.paidByKind,
+    required this.bankName,
+    required this.cardName,
+    required this.country,
+    required this.isActive,
+  });
+
+  final String id;
+  final String ledgerId;
+  final String currencyCode;
+  final String name;
+  final String merchant;
+  final double amount;
+  final int dayOfMonth;
+  final DateTime startMonth;
+  final DateTime? endMonth;
+  final String notes;
+  final PaymentSourceKind paidByKind;
+  final String bankName;
+  final String cardName;
+  final String country;
+  final bool isActive;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'ledgerId': ledgerId,
+        'currencyCode': currencyCode,
+        'name': name,
+        'merchant': merchant,
+        'amount': amount,
+        'dayOfMonth': dayOfMonth,
+        'startMonth': DateTime(startMonth.year, startMonth.month).toIso8601String(),
+        'endMonth': endMonth == null
+            ? null
+            : DateTime(endMonth!.year, endMonth!.month).toIso8601String(),
+        'notes': notes,
+        'paidByKind': paidByKind.name,
+        'bankName': bankName,
+        'cardName': cardName,
+        'country': country,
+        'isActive': isActive,
+      };
+
+  factory ScheduledEmiPlan.fromJson(Map<String, dynamic> json) {
+    final currencyCode =
+        (json['currencyCode'] as String? ?? '').trim().toUpperCase();
+    final startMonth = json['startMonth'] == null
+        ? DateTime.now()
+        : DateTime.parse(json['startMonth'] as String);
+    final endMonthRaw = json['endMonth'] as String?;
+    return ScheduledEmiPlan(
+      id: json['id'] as String,
+      ledgerId: json['ledgerId'] as String? ?? currencyCode.toLowerCase(),
+      currencyCode: currencyCode,
+      name: json['name'] as String? ?? '',
+      merchant: json['merchant'] as String? ?? '',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      dayOfMonth: (json['dayOfMonth'] as num?)?.toInt() ?? 1,
+      startMonth: DateTime(startMonth.year, startMonth.month),
+      endMonth: endMonthRaw == null
+          ? null
+          : DateTime(
+              DateTime.parse(endMonthRaw).year,
+              DateTime.parse(endMonthRaw).month,
+            ),
+      notes: json['notes'] as String? ?? '',
+      paidByKind: enumByName(
+        PaymentSourceKind.values,
+        json['paidByKind'] as String? ?? PaymentSourceKind.other.name,
+        PaymentSourceKind.other,
+      ),
+      bankName: json['bankName'] as String? ?? '',
+      cardName: json['cardName'] as String? ?? '',
+      country: json['country'] as String? ?? '',
+      isActive: json['isActive'] as bool? ?? true,
+    );
+  }
+}
+
 class FxRate {
   FxRate({
     required this.id,
@@ -882,6 +981,7 @@ class FinanceData {
     required this.investments,
     required this.assets,
     required this.liabilities,
+    required this.scheduledEmis,
     required this.fxRates,
     required this.forexTransfers,
   });
@@ -894,6 +994,7 @@ class FinanceData {
   final List<InvestmentEntry> investments;
   final List<AssetHolding> assets;
   final List<LiabilityHolding> liabilities;
+  final List<ScheduledEmiPlan> scheduledEmis;
   final List<FxRate> fxRates;
   final List<ForexTransfer> forexTransfers;
 
@@ -906,6 +1007,7 @@ class FinanceData {
     List<InvestmentEntry>? investments,
     List<AssetHolding>? assets,
     List<LiabilityHolding>? liabilities,
+    List<ScheduledEmiPlan>? scheduledEmis,
     List<FxRate>? fxRates,
     List<ForexTransfer>? forexTransfers,
   }) {
@@ -918,6 +1020,7 @@ class FinanceData {
       investments: investments ?? this.investments,
       assets: assets ?? this.assets,
       liabilities: liabilities ?? this.liabilities,
+      scheduledEmis: scheduledEmis ?? this.scheduledEmis,
       fxRates: fxRates ?? this.fxRates,
       forexTransfers: forexTransfers ?? this.forexTransfers,
     );
@@ -932,6 +1035,7 @@ class FinanceData {
         'investments': investments.map((item) => item.toJson()).toList(),
         'assets': assets.map((item) => item.toJson()).toList(),
         'liabilities': liabilities.map((item) => item.toJson()).toList(),
+        'scheduledEmis': scheduledEmis.map((item) => item.toJson()).toList(),
         'fxRates': fxRates.map((item) => item.toJson()).toList(),
         'forexTransfers': forexTransfers.map((item) => item.toJson()).toList(),
       };
@@ -963,6 +1067,9 @@ class FinanceData {
           .toList(),
       liabilities: (json['liabilities'] as List<dynamic>? ?? const [])
           .map((item) => LiabilityHolding.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      scheduledEmis: (json['scheduledEmis'] as List<dynamic>? ?? const [])
+          .map((item) => ScheduledEmiPlan.fromJson(item as Map<String, dynamic>))
           .toList(),
       fxRates: (json['fxRates'] as List<dynamic>? ?? const [])
           .map((item) => FxRate.fromJson(item as Map<String, dynamic>))

@@ -7,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'backup_service.dart';
-import 'collaboration_controller.dart';
 import 'finance_controller.dart';
 import 'models.dart';
 
@@ -15,11 +14,9 @@ class HomeFinanceApp extends StatelessWidget {
   const HomeFinanceApp({
     super.key,
     required this.controller,
-    required this.collaborationController,
   });
 
   final FinanceController controller;
-  final CollaborationController collaborationController;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +54,6 @@ class HomeFinanceApp extends StatelessWidget {
       theme: theme,
       home: FinanceHome(
         controller: controller,
-        collaborationController: collaborationController,
       ),
     );
   }
@@ -67,11 +63,9 @@ class FinanceHome extends StatefulWidget {
   const FinanceHome({
     super.key,
     required this.controller,
-    required this.collaborationController,
   });
 
   final FinanceController controller;
-  final CollaborationController collaborationController;
 
   @override
   State<FinanceHome> createState() => _FinanceHomeState();
@@ -86,7 +80,6 @@ class _FinanceHomeState extends State<FinanceHome> {
       animation: Listenable.merge(
         [
           widget.controller,
-          widget.collaborationController,
         ],
       ),
       builder: (context, _) {
@@ -109,22 +102,9 @@ class _FinanceHomeState extends State<FinanceHome> {
             title: const Text('Home Finance'),
             actions: [
               IconButton(
-                onPressed: () => _showCollaborationSheet(context),
-                icon: Icon(
-                  widget.collaborationController.session == null
-                      ? Icons.bluetooth_searching
-                      : Icons.bluetooth_connected,
-                ),
-                tooltip: 'Collaboration',
-              ),
-              IconButton(
-                onPressed: () => _showAccountSheet(context),
-                icon: Icon(
-                  widget.collaborationController.isSignedIn
-                      ? Icons.account_circle
-                      : Icons.login,
-                ),
-                tooltip: 'Google Sign-In',
+                onPressed: () => _showQuickAddSheet(context),
+                icon: const Icon(Icons.add_circle_outline),
+                tooltip: 'Add entry',
               ),
               IconButton(
                 onPressed: () => _showSettingsSheet(context),
@@ -174,208 +154,6 @@ class _FinanceHomeState extends State<FinanceHome> {
               ),
             ],
           ),
-        );
-      },
-    );
-  }
-
-  Future<void> _showAccountSheet(BuildContext context) async {
-    final collaboration = widget.collaborationController;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            20,
-            20,
-            20,
-            MediaQuery.of(context).viewInsets.bottom + 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Google Sign-In',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              if (collaboration.profile == null)
-                Text(
-                  collaboration.googleConfigured
-                      ? 'Sign in to link this finance profile with collaboration sessions.'
-                      : 'Google Sign-In still needs native client configuration before authentication can complete.',
-                )
-              else
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(child: Icon(Icons.person)),
-                  title: Text(collaboration.profile!.displayName),
-                  subtitle: Text(collaboration.profile!.email),
-                ),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: collaboration.loading
-                    ? null
-                    : () async {
-                        if (collaboration.profile == null) {
-                          await collaboration.signIn();
-                        } else {
-                          await collaboration.signOut();
-                        }
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                child: Text(
-                  collaboration.profile == null ? 'Sign in with Google' : 'Sign out',
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _showCollaborationSheet(BuildContext context) async {
-    final collaboration = widget.collaborationController;
-    final joinController = TextEditingController();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final session = collaboration.session;
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                20,
-                20,
-                MediaQuery.of(context).viewInsets.bottom + 20,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Paired Session',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      session == null
-                          ? 'Create or join a paired session to sync data between two users.'
-                          : 'Session ${session.sessionCode} • ${session.connectionState.name}',
-                    ),
-                    const SizedBox(height: 8),
-                    Text(collaboration.bluetoothStatusMessage),
-                    const SizedBox(height: 16),
-                    if (session != null) ...[
-                      _MetricRow(
-                        label: 'Role',
-                        value: session.role.name.toUpperCase(),
-                      ),
-                      _MetricRow(
-                        label: 'Pending sync events',
-                        value: '${collaboration.pendingEventCount}',
-                      ),
-                      _MetricRow(
-                        label: 'Last sync',
-                        value: session.lastSyncedAt == null
-                            ? 'Not yet'
-                            : _formatDateTime(session.lastSyncedAt!),
-                      ),
-                      if (session.remoteUser != null)
-                        _MetricRow(
-                          label: 'Remote user',
-                          value:
-                              '${session.remoteUser!.displayName} (${session.remoteUser!.email})',
-                        ),
-                      const SizedBox(height: 12),
-                    ],
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () async {
-                              await collaboration.createSession();
-                              setSheetState(() {});
-                            },
-                            icon: const Icon(Icons.wifi_tethering),
-                            label: const Text('Host'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              await showDialog<void>(
-                                context: context,
-                                builder: (dialogContext) {
-                                  return AlertDialog(
-                                    title: const Text('Join session'),
-                                    content: TextField(
-                                      controller: joinController,
-                                      textCapitalization:
-                                          TextCapitalization.characters,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Session code',
-                                      ),
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(dialogContext),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      FilledButton(
-                                        onPressed: () async {
-                                          await collaboration.joinSession(
-                                            joinController.text,
-                                          );
-                                          if (dialogContext.mounted) {
-                                            Navigator.pop(dialogContext);
-                                          }
-                                          setSheetState(() {});
-                                        },
-                                        child: const Text('Join'),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              );
-                            },
-                            icon: const Icon(Icons.link),
-                            label: const Text('Join'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (session != null) ...[
-                      const SizedBox(height: 12),
-                      FilledButton.tonalIcon(
-                        onPressed: () async {
-                          await collaboration.openBluetoothSettings();
-                        },
-                        icon: const Icon(Icons.settings_bluetooth),
-                        label: const Text('Bluetooth settings'),
-                      ),
-                      const SizedBox(height: 12),
-                      TextButton.icon(
-                        onPressed: () async {
-                          await collaboration.disconnectSession();
-                          if (context.mounted) Navigator.pop(context);
-                        },
-                        icon: const Icon(Icons.link_off),
-                        label: const Text('Disconnect session'),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
         );
       },
     );
@@ -566,7 +344,7 @@ class _FinanceHomeState extends State<FinanceHome> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'JSON contains all records (same idea as Bluetooth full sync). '
+                      'JSON contains all records for full device-to-device backup. '
                       'CSV is expenses only for Excel or Sheets.',
                     ),
                     const SizedBox(height: 12),
@@ -745,6 +523,79 @@ class _FinanceHomeState extends State<FinanceHome> {
       );
     }
   }
+
+  Future<void> _showQuickAddSheet(BuildContext context) async {
+    final controller = widget.controller;
+    if (controller.selectedLedger == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.receipt_long_outlined),
+                title: const Text('Manual expense entry'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showManualExpenseSheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.payments_outlined),
+                title: const Text('Add earning'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showEarningSheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.savings_outlined),
+                title: const Text('Add savings'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showSavingsSheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.trending_up_outlined),
+                title: const Text('Add investment'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showInvestmentSheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.account_balance_wallet_outlined),
+                title: const Text('Add asset'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showAssetSheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.credit_score_outlined),
+                title: const Text('Add liability'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showLiabilitySheet(context, controller);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.event_repeat_outlined),
+                title: const Text('Add scheduled EMI'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showScheduledEmiSheet(context, controller);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 class LedgerSetupScreen extends StatefulWidget {
@@ -915,52 +766,6 @@ class DashboardScreen extends StatelessWidget {
           totalInvestments: summary.totalInvestments,
         ),
         const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final columns = _responsiveGridColumns(
-              constraints.maxWidth,
-              compactMinWidth: 146,
-              mediumMinWidth: 168,
-              maxColumns: 4,
-            );
-            return GridView.count(
-              crossAxisCount: columns,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: constraints.maxWidth < 390 ? 1.9 : 2.25,
-              children: [
-                _ActionChipCard(
-                  icon: Icons.payments_outlined,
-                  label: 'Add earning',
-                  onTap: () => _showEarningSheet(context, controller),
-                ),
-                _ActionChipCard(
-                  icon: Icons.savings_outlined,
-                  label: 'Add savings',
-                  onTap: () => _showSavingsSheet(context, controller),
-                ),
-                _ActionChipCard(
-                  icon: Icons.trending_up_outlined,
-                  label: 'Add investment',
-                  onTap: () => _showInvestmentSheet(context, controller),
-                ),
-                _ActionChipCard(
-                  icon: Icons.account_balance_wallet_outlined,
-                  label: 'Add asset',
-                  onTap: () => _showAssetSheet(context, controller),
-                ),
-                _ActionChipCard(
-                  icon: Icons.credit_score_outlined,
-                  label: 'Add liability',
-                  onTap: () => _showLiabilitySheet(context, controller),
-                ),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 16),
         _SectionCard(
           title: 'Investments',
           subtitle:
@@ -1039,6 +844,33 @@ class DashboardScreen extends StatelessWidget {
                     .toList(),
               ),
             ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SectionCard(
+          title: 'Scheduled EMI',
+          subtitle:
+              'Recurring EMI plans active for ${controller.selectedMonth.year}-${controller.selectedMonth.month.toString().padLeft(2, '0')} in $currency',
+          child: _EditableLedgerList(
+            emptyText: 'No scheduled EMI plans added yet.',
+            items: controller.scheduledEmisForSelectedLedgerInSelectedMonth
+                .map(
+                  (item) => _EditableLedgerItem(
+                    title: item.name,
+                    subtitle:
+                        '${item.currencyCode} ${item.amount.toStringAsFixed(2)} • day ${item.dayOfMonth}'
+                        '${item.merchant.isNotEmpty ? ' • ${item.merchant}' : ''}'
+                        '${item.bankName.isNotEmpty ? ' • ${item.bankName}' : ''}'
+                        '${item.cardName.isNotEmpty ? ' • ${item.cardName}' : ''}',
+                    onEdit: () => _showScheduledEmiSheet(context, controller, item),
+                    onDelete: () => _confirmDelete(
+                      context,
+                      title: 'Delete scheduled EMI?',
+                      onDelete: () => controller.deleteScheduledEmi(item.id),
+                    ),
+                  ),
+                )
+                .toList(),
           ),
         ),
         const SizedBox(height: 16),
@@ -1227,27 +1059,23 @@ class ExpensesScreen extends StatelessWidget {
       children: [
         const _SectionHeader(
           title: 'Daily Expenses',
-          subtitle: 'Capture manual entries and imported bank/SMS messages inside the selected currency ledger.',
+          subtitle: 'Use the top-right plus button for new entries. Imported bank/SMS messages can still be pasted here inside the selected currency ledger.',
         ),
         const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => _showManualExpenseSheet(context, controller),
-                icon: const Icon(Icons.add),
-                label: const Text('Manual entry'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => _showImportMessageSheet(context, controller),
-                icon: const Icon(Icons.sms_outlined),
-                label: const Text('Import message'),
-              ),
-            ),
-          ],
+        OutlinedButton.icon(
+          onPressed: () => _showImportMessageSheet(context, controller),
+          icon: const Icon(Icons.sms_outlined),
+          label: const Text('Import message'),
+        ),
+        const SizedBox(height: 16),
+        _ExpenseMonthTrendStrip(
+          currencyCode: currency,
+          monthA: m0,
+          monthB: m1,
+          monthC: m,
+          totalA: t0,
+          totalB: t1,
+          totalC: t2,
         ),
         const SizedBox(height: 16),
         _SectionCard(
@@ -1285,6 +1113,7 @@ class ExpensesScreen extends StatelessWidget {
                           '${expense.category.label}'
                           '${expense.subtype != null ? ' • ${expense.subtype!.label}' : ''}'
                           '${expense.utilityType != null ? ' • ${expense.utilityType!.label}' : ''}'
+                          '${expense.isScheduledEmiGenerated ? ' • Auto scheduled' : ''}'
                           '${expense.bankName.isNotEmpty ? ' • ${expense.bankName}' : ''}'
                           '${expense.cardName.isNotEmpty ? ' • ${expense.cardName}' : ''}'
                           '${expense.paymentChannel.isNotEmpty ? ' • ${expense.paymentChannel}' : ''}'
@@ -1294,12 +1123,27 @@ class ExpensesScreen extends StatelessWidget {
                         trailing: PopupMenuButton<String>(
                           onSelected: (value) {
                             if (value == 'edit') {
-                              _showManualExpenseSheet(context, controller, expense);
+                              if (expense.isScheduledEmiGenerated) {
+                                final schedule = controller.scheduledEmiById(
+                                  expense.scheduledEmiPlanId,
+                                );
+                                if (schedule != null) {
+                                  _showScheduledEmiSheet(context, controller, schedule);
+                                }
+                              } else {
+                                _showManualExpenseSheet(context, controller, expense);
+                              }
                             } else if (value == 'delete') {
                               _confirmDelete(
                                 context,
-                                title: 'Delete expense?',
-                                onDelete: () => controller.deleteExpense(expense.id),
+                                title: expense.isScheduledEmiGenerated
+                                    ? 'Delete scheduled EMI?'
+                                    : 'Delete expense?',
+                                onDelete: () => expense.isScheduledEmiGenerated
+                                    ? controller.deleteScheduledEmi(
+                                        expense.scheduledEmiPlanId,
+                                      )
+                                    : controller.deleteExpense(expense.id),
                               );
                             }
                           },
@@ -1920,46 +1764,6 @@ class _SectionCard extends StatelessWidget {
             Text(subtitle, style: TextStyle(color: Colors.grey.shade700)),
             const SizedBox(height: 16),
             child,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ActionChipCard extends StatelessWidget {
-  const _ActionChipCard({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          color: Colors.white,
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
           ],
         ),
       ),
@@ -2615,10 +2419,11 @@ Future<void> _showManualExpenseSheet(
                   ),
                 ],
               ),
+            ),
             );
           },
         );
-    },
+      },
   );
 }
 
@@ -2884,6 +2689,295 @@ Future<void> _showLiabilitySheet(
   );
 }
 
+Future<void> _showScheduledEmiSheet(
+  BuildContext context,
+  FinanceController controller, [
+  ScheduledEmiPlan? existingPlan,
+]) async {
+  final ledger = existingPlan == null
+      ? controller.selectedLedger
+      : controller.ledgerById(existingPlan.ledgerId);
+  if (ledger == null) return;
+  final bankOptions = controller.banks;
+  final cardOptions = controller.cards;
+  final nameController = TextEditingController(text: existingPlan?.name ?? '');
+  final merchantController =
+      TextEditingController(text: existingPlan?.merchant ?? '');
+  final amountController = TextEditingController(
+    text: existingPlan?.amount.toStringAsFixed(2) ?? '',
+  );
+  final notesController = TextEditingController(text: existingPlan?.notes ?? '');
+  final countryController =
+      TextEditingController(text: existingPlan?.country ?? '');
+  var selectedPaidByKind =
+      existingPlan?.paidByKind ?? PaymentSourceKind.bank;
+  String? selectedBankName = existingPlan?.bankName.isNotEmpty == true
+      ? existingPlan!.bankName
+      : (bankOptions.isNotEmpty ? bankOptions.first : null);
+  String? selectedCardName = existingPlan?.cardName.isNotEmpty == true
+      ? existingPlan!.cardName
+      : (cardOptions.isNotEmpty ? cardOptions.first : null);
+  var selectedDay = existingPlan?.dayOfMonth ?? 5;
+  var startMonth =
+      existingPlan?.startMonth ?? controller.selectedMonth;
+  var hasEndMonth = existingPlan?.endMonth != null;
+  var endMonth = existingPlan?.endMonth ?? controller.selectedMonth;
+  var isActive = existingPlan?.isActive ?? true;
+
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              20,
+              20,
+              MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    existingPlan == null ? 'Add Scheduled EMI' : 'Edit Scheduled EMI',
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  _ReadOnlyLedgerField(ledger: ledger),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(labelText: 'EMI name'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: merchantController,
+                    decoration: const InputDecoration(
+                      labelText: 'Lender / merchant',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: amountController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(labelText: 'Amount (${ledger.currencyCode})'),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    initialValue: selectedDay,
+                    decoration: const InputDecoration(labelText: 'Payment day of month'),
+                    items: List.generate(
+                      31,
+                      (index) => DropdownMenuItem<int>(
+                        value: index + 1,
+                        child: Text('${index + 1}'),
+                      ),
+                    ),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setSheetState(() => selectedDay = value);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<PaymentSourceKind>(
+                    initialValue: selectedPaidByKind,
+                    decoration: const InputDecoration(labelText: 'Paid by'),
+                    items: PaymentSourceKind.values
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item,
+                            child: Text(item.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setSheetState(() {
+                        selectedPaidByKind = value;
+                        if (value != PaymentSourceKind.bank &&
+                            value != PaymentSourceKind.upi) {
+                          selectedBankName = null;
+                        } else if (selectedBankName == null &&
+                            bankOptions.isNotEmpty) {
+                          selectedBankName = bankOptions.first;
+                        }
+                        if (value != PaymentSourceKind.card) {
+                          selectedCardName = null;
+                        } else if (selectedCardName == null &&
+                            cardOptions.isNotEmpty) {
+                          selectedCardName = cardOptions.first;
+                        }
+                      });
+                    },
+                  ),
+                  if ((selectedPaidByKind == PaymentSourceKind.bank ||
+                          selectedPaidByKind == PaymentSourceKind.upi) &&
+                      bankOptions.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: bankOptions.contains(selectedBankName)
+                          ? selectedBankName
+                          : bankOptions.first,
+                      decoration: const InputDecoration(labelText: 'Bank'),
+                      items: bankOptions
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item,
+                              child: Text(item),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) => setSheetState(() => selectedBankName = value),
+                    ),
+                  ],
+                  if (selectedPaidByKind == PaymentSourceKind.card &&
+                      cardOptions.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: cardOptions.contains(selectedCardName)
+                          ? selectedCardName
+                          : cardOptions.first,
+                      decoration: const InputDecoration(labelText: 'Card'),
+                      items: cardOptions
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item,
+                              child: Text(item),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) => setSheetState(() => selectedCardName = value),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesController,
+                    decoration: const InputDecoration(labelText: 'Notes'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: countryController,
+                    decoration: const InputDecoration(labelText: 'Country (optional)'),
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: hasEndMonth,
+                    title: const Text('Set end month'),
+                    onChanged: (value) => setSheetState(() => hasEndMonth = value),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: isActive,
+                    title: const Text('Active schedule'),
+                    onChanged: (value) => setSheetState(() => isActive = value),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Start month'),
+                    subtitle: Text(
+                      '${startMonth.year}-${startMonth.month.toString().padLeft(2, '0')}',
+                    ),
+                    trailing: const Icon(Icons.calendar_today_outlined),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: startMonth,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2100),
+                        initialDatePickerMode: DatePickerMode.year,
+                      );
+                      if (picked != null) {
+                        setSheetState(
+                          () => startMonth = DateTime(picked.year, picked.month),
+                        );
+                      }
+                    },
+                  ),
+                  if (hasEndMonth)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('End month'),
+                      subtitle: Text(
+                        '${endMonth.year}-${endMonth.month.toString().padLeft(2, '0')}',
+                      ),
+                      trailing: const Icon(Icons.calendar_today_outlined),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: endMonth,
+                          firstDate: startMonth,
+                          lastDate: DateTime(2100),
+                          initialDatePickerMode: DatePickerMode.year,
+                        );
+                        if (picked != null) {
+                          setSheetState(
+                            () => endMonth = DateTime(picked.year, picked.month),
+                          );
+                        }
+                      },
+                    ),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: () async {
+                      final amount = double.tryParse(amountController.text) ?? 0;
+                      if (amount <= 0 || nameController.text.trim().isEmpty) return;
+                      if (existingPlan == null) {
+                        await controller.addScheduledEmi(
+                          ledgerId: ledger.id,
+                          currencyCode: ledger.currencyCode,
+                          name: nameController.text.trim(),
+                          merchant: merchantController.text.trim(),
+                          amount: amount,
+                          dayOfMonth: selectedDay,
+                          startMonth: startMonth,
+                          endMonth: hasEndMonth ? endMonth : null,
+                          notes: notesController.text.trim(),
+                          paidByKind: selectedPaidByKind,
+                          bankName: selectedBankName ?? '',
+                          cardName: selectedCardName ?? '',
+                          country: countryController.text.trim(),
+                          isActive: isActive,
+                        );
+                      } else {
+                        await controller.updateScheduledEmi(
+                          id: existingPlan.id,
+                          ledgerId: existingPlan.ledgerId,
+                          currencyCode: existingPlan.currencyCode,
+                          name: nameController.text.trim(),
+                          merchant: merchantController.text.trim(),
+                          amount: amount,
+                          dayOfMonth: selectedDay,
+                          startMonth: startMonth,
+                          endMonth: hasEndMonth ? endMonth : null,
+                          notes: notesController.text.trim(),
+                          paidByKind: selectedPaidByKind,
+                          bankName: selectedBankName ?? '',
+                          cardName: selectedCardName ?? '',
+                          country: countryController.text.trim(),
+                          isActive: isActive,
+                        );
+                      }
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                    child: Text(
+                      existingPlan == null ? 'Save scheduled EMI' : 'Update scheduled EMI',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
 Future<void> _showSavingsSheet(
   BuildContext context,
   FinanceController controller, [
@@ -3038,12 +3132,12 @@ Future<void> _showSavingsSheet(
                   ),
                 ],
               ),
+            ),
             );
           },
         );
       },
     );
-  }
 }
 
 Future<void> _showInvestmentSheet(
@@ -3170,10 +3264,11 @@ Future<void> _showInvestmentSheet(
                   ),
                 ],
               ),
+            ),
             );
           },
         );
-    },
+      },
   );
 }
 
@@ -3298,10 +3393,11 @@ Future<void> _showEarningSheet(
                   ),
                 ],
               ),
+            ),
             );
           },
         );
-    },
+      },
   );
 }
 
@@ -3486,10 +3582,11 @@ Future<void> _showForexTransferSheet(
                   ),
                 ],
               ),
+            ),
             );
           },
         );
-    },
+      },
   );
 }
 
@@ -3707,14 +3804,6 @@ String _formatDate(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
   return '${date.year}-$month-$day';
-}
-
-String _formatDateTime(DateTime date) {
-  final month = date.month.toString().padLeft(2, '0');
-  final day = date.day.toString().padLeft(2, '0');
-  final hour = date.hour.toString().padLeft(2, '0');
-  final minute = date.minute.toString().padLeft(2, '0');
-  return '${date.year}-$month-$day $hour:$minute';
 }
 
 int _responsiveGridColumns(

@@ -1,11 +1,9 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'collaboration_models.dart';
 import 'models.dart';
 
 class ParsedExpenseDraft {
@@ -176,11 +174,7 @@ class FinanceController extends ChangeNotifier {
   final SharedPreferences _prefs;
   FinanceData _data;
   DateTime _selectedMonth;
-  final StreamController<FinanceSyncEvent> _syncEvents =
-      StreamController<FinanceSyncEvent>.broadcast();
-
   FinanceData get data => _data;
-  Stream<FinanceSyncEvent> get syncEvents => _syncEvents.stream;
   FinanceSettings get settings => _data.settings;
   CurrencyLedgerProfile? get selectedLedger => settings.selectedLedger;
   String get selectedLedgerId => selectedLedger?.id ?? '';
@@ -211,6 +205,8 @@ class FinanceController extends ChangeNotifier {
   List<InvestmentEntry> get investments => _sortByDateDescending(_data.investments, (item) => item.month);
   List<AssetHolding> get assets => _sortByDateDescending(_data.assets, (item) => item.valuationDate);
   List<LiabilityHolding> get liabilities => _sortByNullableDateDescending(_data.liabilities, (item) => item.dueDate);
+  List<ScheduledEmiPlan> get scheduledEmis =>
+      _sortByDateDescending(_data.scheduledEmis, (item) => item.startMonth);
   List<FxRate> get fxRates => _sortByDateDescending(_data.fxRates, (item) => item.effectiveDate);
   List<ForexTransfer> get forexTransfers => _sortByDateDescending(_data.forexTransfers, (item) => item.transferDate);
 
@@ -218,32 +214,14 @@ class FinanceController extends ChangeNotifier {
       _filterBySelectedLedger(expensesByExpenseDateDescThenCreatedAtDesc, (item) => item.ledgerId);
 
   List<ExpenseEntry> expensesForSelectedLedgerInMonth(DateTime month) {
-    final m = DateTime(month.year, month.month);
-    return expensesForSelectedLedger
-        .where(
-          (item) =>
-              item.transactionDate.year == m.year && item.transactionDate.month == m.month,
-        )
-        .toList()
-      ..sort((a, b) {
-        final tx = b.transactionDate.compareTo(a.transactionDate);
-        if (tx != 0) return tx;
-        return b.createdAt.compareTo(a.createdAt);
-      });
+    return _expensesForLedgerInMonth(selectedLedgerId, month);
   }
 
   List<ExpenseEntry> get expensesForSelectedLedgerInSelectedMonth =>
       expensesForSelectedLedgerInMonth(selectedMonth);
 
   double totalExpenseForLedgerInMonth(String ledgerId, DateTime month) {
-    final m = DateTime(month.year, month.month);
-    return _data.expenses
-        .where(
-          (item) =>
-              item.ledgerId == ledgerId &&
-              item.transactionDate.year == m.year &&
-              item.transactionDate.month == m.month,
-        )
+    return _expensesForLedgerInMonth(ledgerId, month)
         .fold<double>(0, (sum, item) => sum + item.nativeAmount);
   }
   List<MonthlyEarningRecord> get earningsForSelectedLedger => _filterBySelectedLedger(earningsRecords, (item) => item.ledgerId);
@@ -252,6 +230,8 @@ class FinanceController extends ChangeNotifier {
   List<InvestmentEntry> get investmentsForSelectedLedger => _filterBySelectedLedger(investments, (item) => item.ledgerId);
   List<AssetHolding> get assetsForSelectedLedger => _filterBySelectedLedger(assets, (item) => item.ledgerId);
   List<LiabilityHolding> get liabilitiesForSelectedLedger => _filterBySelectedLedger(liabilities, (item) => item.ledgerId);
+  List<ScheduledEmiPlan> get scheduledEmisForSelectedLedger =>
+      _filterBySelectedLedger(scheduledEmis, (item) => item.ledgerId);
 
   bool _sameCalendarMonth(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month;
@@ -293,6 +273,11 @@ class FinanceController extends ChangeNotifier {
       return isThisCalendarMonth;
     }).toList();
   }
+
+  List<ScheduledEmiPlan> get scheduledEmisForSelectedLedgerInSelectedMonth =>
+      scheduledEmisForSelectedLedger
+          .where((item) => _scheduledEmiAppliesToMonth(item, selectedMonth))
+          .toList();
 
   static Future<FinanceController> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -370,6 +355,7 @@ class FinanceController extends ChangeNotifier {
       investments: const [],
       assets: const [],
       liabilities: const [],
+      scheduledEmis: const [],
       fxRates: const [],
       forexTransfers: const [],
     );
@@ -420,6 +406,9 @@ class FinanceController extends ChangeNotifier {
     for (final item in _data.liabilities) {
       addLedger(item.ledgerId, item.currencyCode);
     }
+    for (final item in _data.scheduledEmis) {
+      addLedger(item.ledgerId, item.currencyCode);
+    }
 
     _data = _data.copyWith(
       settings: FinanceSettings(
@@ -441,23 +430,6 @@ class FinanceController extends ChangeNotifier {
   String _newId(String prefix) =>
       '$prefix-${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(9999)}';
 
-  void _emitSyncEvent({
-    required SyncEntityType entityType,
-    required SyncActionType actionType,
-    required String recordId,
-  }) {
-    _syncEvents.add(
-      FinanceSyncEvent(
-        id: _newId('sync'),
-        entityType: entityType,
-        actionType: actionType,
-        recordId: recordId,
-        timestamp: DateTime.now(),
-        snapshot: _data.encode(),
-      ),
-    );
-  }
-
   Future<void> mergeImportedExpenses(List<ExpenseEntry> incoming) async {
     final map = <String, ExpenseEntry>{for (final e in _data.expenses) e.id: e};
     for (final e in incoming) {
@@ -465,11 +437,6 @@ class FinanceController extends ChangeNotifier {
     }
     _data = _data.copyWith(expenses: map.values.toList());
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.updated,
-      recordId: 'expense-csv-import',
-    );
     notifyListeners();
   }
 
@@ -477,11 +444,6 @@ class FinanceController extends ChangeNotifier {
     _data = data;
     await _migrateIfNeeded();
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.replaced,
-      recordId: recordId,
-    );
     notifyListeners();
   }
 
@@ -507,11 +469,6 @@ class FinanceController extends ChangeNotifier {
       ),
     );
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.created,
-      recordId: ledger.id,
-    );
     notifyListeners();
   }
 
@@ -537,11 +494,6 @@ class FinanceController extends ChangeNotifier {
       ),
     );
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.created,
-      recordId: ledger.id,
-    );
     notifyListeners();
   }
 
@@ -560,11 +512,6 @@ class FinanceController extends ChangeNotifier {
       ),
     );
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.updated,
-      recordId: 'ledgers',
-    );
     notifyListeners();
   }
 
@@ -574,17 +521,19 @@ class FinanceController extends ChangeNotifier {
       settings: settings.copyWith(selectedLedgerId: ledgerId),
     );
     await _persist();
-    _emitSyncEvent(
-      entityType: SyncEntityType.settings,
-      actionType: SyncActionType.updated,
-      recordId: ledgerId,
-    );
     notifyListeners();
   }
 
   CurrencyLedgerProfile? ledgerById(String ledgerId) {
     for (final ledger in settings.currencyLedgers) {
       if (ledger.id == ledgerId) return ledger;
+    }
+    return null;
+  }
+
+  ScheduledEmiPlan? scheduledEmiById(String id) {
+    for (final item in _data.scheduledEmis) {
+      if (item.id == id) return item;
     }
     return null;
   }
@@ -605,11 +554,7 @@ class FinanceController extends ChangeNotifier {
         cards: cards != null ? _normalizeStringItems(cards) : null,
       ),
     );
-    await _persistAndNotify(
-      SyncEntityType.settings,
-      SyncActionType.updated,
-      'master-data',
-    );
+    await _persistAndNotify();
   }
 
   ParsedExpenseDraft parseExpenseMessage(
@@ -832,10 +777,11 @@ class FinanceController extends ChangeNotifier {
       bankName: bankName,
       cardName: cardName,
       externalMessageId: externalMessageId,
+      scheduledEmiPlanId: '',
       country: country,
     );
     _data = _data.copyWith(expenses: [..._data.expenses, item]);
-    await _persistAndNotify(SyncEntityType.expense, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateExpense({
@@ -874,18 +820,19 @@ class FinanceController extends ChangeNotifier {
           bankName: bankName,
           cardName: cardName,
           externalMessageId: externalMessageId,
+          scheduledEmiPlanId: '',
           country: country,
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.expense, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> deleteExpense(String id) async {
     _data = _data.copyWith(
       expenses: _data.expenses.where((item) => item.id != id).toList(),
     );
-    await _persistAndNotify(SyncEntityType.expense, SyncActionType.deleted, id);
+    await _persistAndNotify();
   }
 
   Future<void> importExpenseMessage({
@@ -927,10 +874,11 @@ class FinanceController extends ChangeNotifier {
       bankName: '',
       cardName: '',
       externalMessageId: externalMessageId,
+      scheduledEmiPlanId: '',
       country: parsed.country,
     );
     _data = _data.copyWith(expenses: [..._data.expenses, item]);
-    await _persistAndNotify(SyncEntityType.expense, SyncActionType.imported, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> autoImportSmsExpense({
@@ -995,7 +943,7 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.expense, SyncActionType.updated, expense.id);
+    await _persistAndNotify();
   }
 
   Future<void> addSavingsRecord({
@@ -1018,7 +966,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(savingsRecords: [..._data.savingsRecords, item]);
-    await _persistAndNotify(SyncEntityType.savings, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateSavingsRecord({
@@ -1046,14 +994,14 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.savings, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> deleteSavingsRecord(String id) async {
     _data = _data.copyWith(
       savingsRecords: _data.savingsRecords.where((item) => item.id != id).toList(),
     );
-    await _persistAndNotify(SyncEntityType.savings, SyncActionType.deleted, id);
+    await _persistAndNotify();
   }
 
   Future<void> addEarningRecord({
@@ -1076,7 +1024,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(earningsRecords: [..._data.earningsRecords, item]);
-    await _persistAndNotify(SyncEntityType.earning, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateEarningRecord({
@@ -1104,14 +1052,14 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.earning, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> deleteEarningRecord(String id) async {
     _data = _data.copyWith(
       earningsRecords: _data.earningsRecords.where((item) => item.id != id).toList(),
     );
-    await _persistAndNotify(SyncEntityType.earning, SyncActionType.deleted, id);
+    await _persistAndNotify();
   }
 
   Future<void> addSavingsAllocation({
@@ -1134,7 +1082,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(allocations: [..._data.allocations, item]);
-    await _persistAndNotify(SyncEntityType.savingsAllocation, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> addInvestmentEntry({
@@ -1157,7 +1105,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(investments: [..._data.investments, item]);
-    await _persistAndNotify(SyncEntityType.investment, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateInvestmentEntry({
@@ -1185,14 +1133,14 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.investment, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> deleteInvestmentEntry(String id) async {
     _data = _data.copyWith(
       investments: _data.investments.where((item) => item.id != id).toList(),
     );
-    await _persistAndNotify(SyncEntityType.investment, SyncActionType.deleted, id);
+    await _persistAndNotify();
   }
 
   Future<void> addAsset({
@@ -1217,7 +1165,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(assets: [..._data.assets, item]);
-    await _persistAndNotify(SyncEntityType.asset, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateAsset({
@@ -1247,7 +1195,7 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.asset, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> addLiability({
@@ -1272,7 +1220,7 @@ class FinanceController extends ChangeNotifier {
       country: country,
     );
     _data = _data.copyWith(liabilities: [..._data.liabilities, item]);
-    await _persistAndNotify(SyncEntityType.liability, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateLiability({
@@ -1302,7 +1250,93 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.liability, SyncActionType.updated, id);
+    await _persistAndNotify();
+  }
+
+  Future<void> addScheduledEmi({
+    required String ledgerId,
+    required String currencyCode,
+    required String name,
+    required String merchant,
+    required double amount,
+    required int dayOfMonth,
+    required DateTime startMonth,
+    DateTime? endMonth,
+    required String notes,
+    PaymentSourceKind paidByKind = PaymentSourceKind.other,
+    String bankName = '',
+    String cardName = '',
+    String country = '',
+    bool isActive = true,
+  }) async {
+    final item = ScheduledEmiPlan(
+      id: _newId('emi'),
+      ledgerId: ledgerId,
+      currencyCode: currencyCode,
+      name: name,
+      merchant: merchant,
+      amount: amount,
+      dayOfMonth: dayOfMonth.clamp(1, 31),
+      startMonth: DateTime(startMonth.year, startMonth.month),
+      endMonth: endMonth == null ? null : DateTime(endMonth.year, endMonth.month),
+      notes: notes,
+      paidByKind: paidByKind,
+      bankName: bankName,
+      cardName: cardName,
+      country: country,
+      isActive: isActive,
+    );
+    _data = _data.copyWith(scheduledEmis: [..._data.scheduledEmis, item]);
+    await _persistAndNotify();
+  }
+
+  Future<void> updateScheduledEmi({
+    required String id,
+    required String ledgerId,
+    required String currencyCode,
+    required String name,
+    required String merchant,
+    required double amount,
+    required int dayOfMonth,
+    required DateTime startMonth,
+    DateTime? endMonth,
+    required String notes,
+    PaymentSourceKind paidByKind = PaymentSourceKind.other,
+    String bankName = '',
+    String cardName = '',
+    String country = '',
+    bool isActive = true,
+  }) async {
+    _data = _data.copyWith(
+      scheduledEmis: _data.scheduledEmis.map((item) {
+        if (item.id != id) return item;
+        return ScheduledEmiPlan(
+          id: item.id,
+          ledgerId: ledgerId,
+          currencyCode: currencyCode,
+          name: name,
+          merchant: merchant,
+          amount: amount,
+          dayOfMonth: dayOfMonth.clamp(1, 31),
+          startMonth: DateTime(startMonth.year, startMonth.month),
+          endMonth: endMonth == null ? null : DateTime(endMonth.year, endMonth.month),
+          notes: notes,
+          paidByKind: paidByKind,
+          bankName: bankName,
+          cardName: cardName,
+          country: country,
+          isActive: isActive,
+        );
+      }).toList(),
+    );
+    await _persistAndNotify();
+  }
+
+  Future<void> deleteScheduledEmi(String id) async {
+    _data = _data.copyWith(
+      scheduledEmis: _data.scheduledEmis.where((item) => item.id != id).toList(),
+    );
+    await _persistAndNotify();
   }
 
   Future<void> addFxRate({
@@ -1321,7 +1355,7 @@ class FinanceController extends ChangeNotifier {
       rateToReportingCurrency: rate,
     );
     _data = _data.copyWith(fxRates: [..._data.fxRates, item]);
-    await _persistAndNotify(SyncEntityType.fxRate, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   double _conversionRate({
@@ -1378,7 +1412,7 @@ class FinanceController extends ChangeNotifier {
           : toAmount / fromAmount,
     );
     _data = _data.copyWith(forexTransfers: [..._data.forexTransfers, item]);
-    await _persistAndNotify(SyncEntityType.forexTransfer, SyncActionType.created, item.id);
+    await _persistAndNotify();
   }
 
   Future<void> updateForexTransfer({
@@ -1417,24 +1451,20 @@ class FinanceController extends ChangeNotifier {
         );
       }).toList(),
     );
-    await _persistAndNotify(SyncEntityType.forexTransfer, SyncActionType.updated, id);
+    await _persistAndNotify();
   }
 
   Future<void> deleteForexTransfer(String id) async {
     _data = _data.copyWith(
       forexTransfers: _data.forexTransfers.where((item) => item.id != id).toList(),
     );
-    await _persistAndNotify(SyncEntityType.forexTransfer, SyncActionType.deleted, id);
+    await _persistAndNotify();
   }
 
   MonthlyReport monthlyReport(DateTime month, {String? ledgerId}) {
     final activeLedgerId = ledgerId ?? selectedLedgerId;
     final currencyCode = ledgerById(activeLedgerId)?.currencyCode ?? '';
-    final filteredExpenses = _data.expenses.where((item) {
-      return item.ledgerId == activeLedgerId &&
-          item.transactionDate.year == month.year &&
-          item.transactionDate.month == month.month;
-    }).toList();
+    final filteredExpenses = _expensesForLedgerInMonth(activeLedgerId, month);
     final filteredEarnings = _data.earningsRecords.where((item) {
       return item.ledgerId == activeLedgerId &&
           item.month.year == month.year &&
@@ -1505,9 +1535,10 @@ class FinanceController extends ChangeNotifier {
   YearlyReport yearlyReport(int year, {String? ledgerId}) {
     final activeLedgerId = ledgerId ?? selectedLedgerId;
     final currencyCode = ledgerById(activeLedgerId)?.currencyCode ?? '';
-    final yearExpenses = _data.expenses.where((item) {
-      return item.ledgerId == activeLedgerId && item.transactionDate.year == year;
-    }).toList();
+    final yearExpenses = List.generate(
+      12,
+      (index) => _expensesForLedgerInMonth(activeLedgerId, DateTime(year, index + 1)),
+    ).expand((items) => items).toList();
     final yearEarnings = _data.earningsRecords.where((item) {
       return item.ledgerId == activeLedgerId && item.month.year == year;
     }).toList();
@@ -1662,24 +1693,81 @@ class FinanceController extends ChangeNotifier {
   List<ExpenseEntry> currentMonthExpenses({String? ledgerId}) {
     final activeLedgerId = ledgerId ?? selectedLedgerId;
     final now = DateTime.now();
-    return _data.expenses.where((item) {
-      return item.ledgerId == activeLedgerId &&
-          item.transactionDate.year == now.year &&
-          item.transactionDate.month == now.month;
+    return _expensesForLedgerInMonth(activeLedgerId, now);
+  }
+
+  List<ExpenseEntry> _expensesForLedgerInMonth(String ledgerId, DateTime month) {
+    final m = DateTime(month.year, month.month);
+    return [
+      ..._data.expenses.where(
+        (item) =>
+            item.ledgerId == ledgerId &&
+            item.transactionDate.year == m.year &&
+            item.transactionDate.month == m.month,
+      ),
+      ..._scheduledEmiExpensesForLedgerInMonth(ledgerId, m),
+    ]..sort((a, b) {
+        final tx = b.transactionDate.compareTo(a.transactionDate);
+        if (tx != 0) return tx;
+        return b.createdAt.compareTo(a.createdAt);
+      });
+  }
+
+  List<ExpenseEntry> _scheduledEmiExpensesForLedgerInMonth(
+    String ledgerId,
+    DateTime month,
+  ) {
+    final m = DateTime(month.year, month.month);
+    return _data.scheduledEmis.where((plan) {
+      return plan.ledgerId == ledgerId && _scheduledEmiAppliesToMonth(plan, m);
+    }).map((plan) {
+      final dueDate = _scheduledEmiDueDateForMonth(plan, m);
+      return ExpenseEntry(
+        id: 'scheduled-emi-${plan.id}-${m.year}-${m.month.toString().padLeft(2, '0')}',
+        ledgerId: plan.ledgerId,
+        source: EntrySource.manual,
+        createdAt: dueDate,
+        transactionDate: dueDate,
+        currencyCode: plan.currencyCode,
+        nativeAmount: plan.amount,
+        category: ExpenseCategory.housing,
+        subtype: ExpenseSubtype.emi,
+        utilityType: null,
+        notes: plan.notes.isEmpty ? 'Scheduled EMI' : 'Scheduled EMI • ${plan.notes}',
+        merchant: plan.merchant.isEmpty ? plan.name : plan.merchant,
+        confidenceScore: 1,
+        rawMessage: '',
+        paymentChannel: plan.paidByKind.label,
+        paidByKind: plan.paidByKind,
+        bankName: plan.bankName,
+        cardName: plan.cardName,
+        externalMessageId: '',
+        scheduledEmiPlanId: plan.id,
+        country: plan.country,
+      );
     }).toList();
   }
 
-  Future<void> _persistAndNotify(
-    SyncEntityType entityType,
-    SyncActionType actionType,
-    String recordId,
-  ) async {
+  bool _scheduledEmiAppliesToMonth(ScheduledEmiPlan plan, DateTime month) {
+    if (!plan.isActive) return false;
+    final target = DateTime(month.year, month.month);
+    final start = DateTime(plan.startMonth.year, plan.startMonth.month);
+    if (target.isBefore(start)) return false;
+    if (plan.endMonth != null) {
+      final end = DateTime(plan.endMonth!.year, plan.endMonth!.month);
+      if (target.isAfter(end)) return false;
+    }
+    return true;
+  }
+
+  DateTime _scheduledEmiDueDateForMonth(ScheduledEmiPlan plan, DateTime month) {
+    final lastDay = DateTime(month.year, month.month + 1, 0).day;
+    final day = plan.dayOfMonth.clamp(1, lastDay);
+    return DateTime(month.year, month.month, day);
+  }
+
+  Future<void> _persistAndNotify() async {
     await _persist();
-    _emitSyncEvent(
-      entityType: entityType,
-      actionType: actionType,
-      recordId: recordId,
-    );
     notifyListeners();
   }
 
